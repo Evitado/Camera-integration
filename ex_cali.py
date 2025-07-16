@@ -1,13 +1,22 @@
 #!/usr/bin/env python3
 """
-LiDAR ↔ camera extrinsic calibration (Ouster OS-1 + checkerboard)
+ex_cali.py
 
-• Reads matched_camX.csv, camera intrinsics, LiDAR scan CSVs
-• Crops LiDAR by depth, fits checkerboard plane, resolves 8 orientation variants
-• Accumulates 3-D ↔ 2-D correspondences, solves global PnP
-• Writes camX_extrinsics.yaml  (R, t, K, dist)
+Performs extrinsic calibration between each USB camera and the Ouster OS-1 LiDAR
+using synchronized checkerboard images and LiDAR scans.
 
-pip install opencv-python open3d numpy pyyaml pandas
+Steps:
+- Detect checkerboard in camera image
+- Extract LiDAR points around checkerboard (via RANSAC plane fitting)
+- Estimate chessboard pose using LiDAR points and align with camera corners
+- Solve global PnP for extrinsic parameters (rotation + translation)
+- Save extrinsics to camX_extrinsics.yaml
+
+Inputs:
+- camX_image_timestamps.csv
+- camX_scan_*.csv (LiDAR)
+- intrinsics_camX.npz
+- matched_camX.csv
 """
 
 from pathlib import Path
@@ -15,27 +24,33 @@ from typing  import Tuple, List
 
 import cv2, numpy as np, open3d as o3d, yaml, pandas as pd
 
-# ─────────── CONFIG ────────────────────────────────────────────────────
+# ─────────────────────────────
+# Configuration Parameters
+# ─────────────────────────────
+
 ROOT          = Path("/Users/parthmehta/Downloads/mybox-selected")
 CAMERAS       = [0, 1, 2, 3]
-PATTERN_SIZE  = (9, 6)            # interior corners  (cols, rows)
-SQUARE_MM     = 30.0              # printed square size
-NEAR, FAR     = 0.40, 2.50        # depth crop [m] around board
-PLANE_THRESH  = 0.010             # plane RANSAC threshold [m]
-MIN_INLIERS   = 120               # discard planes with fewer inliers
-MAX_FRAMES    = 30                # per-cam processing cap
+PATTERN_SIZE  = (9, 6)            # Checkerboard interior corners  (cols, rows)
+SQUARE_MM     = 30.0              # Square size in mm
+NEAR, FAR     = 0.40, 2.50        # depth crop in m around board
+PLANE_THRESH  = 0.010             # plane RANSAC distance threshold (m)
+MIN_INLIERS   = 120               # Min points to accept a plane
+MAX_FRAMES    = 30                # Max samples to process per cam
 SAVE_DIR      = ROOT / "extrinsics"
-# ───────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────
+# Utility Functions
+# ─────────────────────────────
 
-# ---------- helpers ----------------------------------------------------
 def load_intrinsics(path: Path) -> Tuple[np.ndarray, np.ndarray]:
+    """Load camera matrix and distortion from .npz"""
     d = np.load(path)
     K   = (d["camera_matrix"] if "camera_matrix" in d else d["K"]).reshape(3,3)
     dist = (d["dist_coeff"]   if "dist_coeff"   in d else d["dist"]).reshape(-1,1)
     return K.astype(np.float64), dist.astype(np.float64)
 
 def chessboard_object_points() -> np.ndarray:
+    """Generate ideal 3D coordinates of checkerboard corners (in meters)"""
     w, h = PATTERN_SIZE
     objp = np.zeros((w*h, 3), np.float32)
     objp[:,:2] = np.mgrid[0:w, 0:h].T.reshape(-1,2)
@@ -45,6 +60,7 @@ def chessboard_object_points() -> np.ndarray:
     return objp
 
 def detect_chessboard(path: Path):
+    """Detect checkerboard in grayscale image, return 2D corners"""
     img = cv2.imread(str(path), cv2.IMREAD_GRAYSCALE)
     ok, corners = cv2.findChessboardCorners(img, PATTERN_SIZE,
                    flags=cv2.CALIB_CB_ADAPTIVE_THRESH + cv2.CALIB_CB_NORMALIZE_IMAGE)
@@ -55,6 +71,7 @@ def detect_chessboard(path: Path):
     return corners.reshape(-1,2)
 
 def load_pointcloud(csv_path: Path):
+    """Load XYZ + range data from LiDAR CSV"""
     # columns: TIMESTAMP, X, Y, Z, RANGE, ...
     data = np.loadtxt(csv_path, delimiter=",", usecols=(1,2,3,4))
     xyz   = data[:, :3]                 # metres
@@ -62,6 +79,7 @@ def load_pointcloud(csv_path: Path):
     return xyz, rng
 
 def pca_basis(pts: np.ndarray) -> np.ndarray:
+    """Compute PCA basis (eigenvectors) of a point cloud"""
     cov = np.cov((pts - pts.mean(axis=0)).T)
     _, eigvecs = np.linalg.eigh(cov)    # col-wise, small→large var
     return eigvecs
@@ -70,7 +88,10 @@ def lidar_corners_in_world(
         centroid: np.ndarray, R_plane: np.ndarray,
         K: np.ndarray, dist: np.ndarray, img_corners: np.ndarray
     ) -> np.ndarray:
+    """Estimate checkerboard 3D corner positions using LiDAR and project to camera"""
     objp = chessboard_object_points()
+        
+    # 4 Z-axis rotations to disambiguate plane alignment
     ROT_Z = [
         np.eye(3),
         np.array([[0,-1,0],[1,0,0],[0,0,1]]),
@@ -95,6 +116,7 @@ def lidar_corners_in_world(
     return best_pts
 
 def save_yaml(path: Path, K, dist, rvec, tvec):
+    """Save extrinsic calibration to YAML"""
     R,_ = cv2.Rodrigues(rvec)
     data = dict(camera_matrix=K.tolist(),
                 dist_coeff=dist.flatten().tolist(),
@@ -102,7 +124,10 @@ def save_yaml(path: Path, K, dist, rvec, tvec):
                 translation_vec=tvec.flatten().tolist())
     with open(path,"w") as fh: yaml.safe_dump(data, fh)
 
-# ---------- main routine per cam ---------------------------------------
+# ─────────────────────────────
+# Main Calibration Routine
+# ─────────────────────────────
+
 def process_camera(cam:int)->None:
     print(f"\n— Cam {cam} —")
 
@@ -150,18 +175,24 @@ def process_camera(cam:int)->None:
 
     if good < 5: print("  ⚠ too few frames"); return
 
+    # Solve final global PnP
     img_all = np.vstack(img_pts).astype(np.float32)
     obj_all = np.vstack(obj_pts).astype(np.float32)
     ok,rvec,tvec,_ = cv2.solvePnPRansac(
         obj_all, img_all, K, dist, flags=cv2.SOLVEPNP_EPNP)
     if not ok: print("  ❌ PnP failed"); return
+
+    # Refine solution
     rvec,tvec = cv2.solvePnPRefineLM(obj_all,img_all,K,dist,rvec,tvec)
 
     SAVE_DIR.mkdir(exist_ok=True)
     save_yaml(SAVE_DIR/f"cam{cam}_extrinsics.yaml",K,dist,rvec,tvec)
     print(f"  ✅ saved cam{cam}_extrinsics.yaml   (frames used: {good})")
 
-# ---------- driver ------------------------------------------------------
+# ─────────────────────────────
+# Run calibration for all cameras
+# ─────────────────────────────
+
 def main():
     for cam in CAMERAS:
         process_camera(cam)
