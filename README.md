@@ -4,7 +4,7 @@ This repository documents my internship work involving multi-camera and LiDAR se
 
 ---
 
-## 📷 Camera Setup
+## Camera Setup
 
 ### `camera/camera_view.py`
 Displays a 2x2 live feed grid of 4 AR0234 USB cameras using OpenCV.
@@ -20,7 +20,7 @@ Extracts UNIX and ISO timestamps from saved images and stores in CSV for synchro
 
 ---
 
-## 🔄 Synchronization and Calibration
+## Synchronization and Calibration
 
 ### `calibration/synchronize.py`
 Matches camera image timestamps with LiDAR scan timestamps to generate frame-scan pairs.
@@ -38,7 +38,7 @@ Projects LiDAR points onto undistorted camera images using extrinsic and intrins
 
 ---
 
-## 📦 Data
+## Data
 
 Data required:
 - Calibration images, corners, and `.npz`
@@ -48,7 +48,7 @@ Data required:
 
 ---
 
-## ⚙️ Requirements
+## Requirements
 
 Install dependencies with:
 
