@@ -1,0 +1,7 @@
+ouster-sdk==0.15.*        # official SDK for OS1 – wheel on PyPI
+open3d==0.19.*            # 3‑D viz; pre‑built wheel, no CMake needed
+opencv-python==4.10.*     # camera I/O + calibration
+numpy 
+scipy 
+tqdm          # maths helpers
+camcalib                  # turnkey LiDAR↔camera calibration :contentReference[oaicite:0]{index=0}
