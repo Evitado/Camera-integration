@@ -1,5 +1,6 @@
 # Camera-integration
-This repository documents my internship work involving multi-camera and LiDAR sensor fusion using 4x AR0234 USB cameras and the Ouster OS1 LiDAR. It includes scripts for data capturing, calibration, synchronization, and visualization.
+This repository documents my internship work involving multi-camera and LiDAR sensor fusion using 4x AR0234 USB cameras and the Ouster OS1 LiDAR. It includes scripts for data capturing, calibration, synchronization, and visualization. 
+
 Note: Initial attempts using OpenCV and ROS2 on both WSL and Windows encountered issues. I later pivoted to MATLAB and completed the calibration and synchronization using MATLAB's Lidar Camera Calibrator toolbox.
 
 ---
