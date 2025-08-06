@@ -225,6 +225,166 @@ scripts_2: pip install -r requirements_win.txt
 - Lidar Toolbox
 - Navigation Toolbox (for rigidtform3d support)
 
+
+
+# How to Use
+## Prerequisites Setup
+
+### Install Python dependencies:
+
+pip install -r requirements.txt
+
+### Create project directory structure:
+
+project_root/
+├── calib/                    # Output calibration files
+├── pcap/                     # LiDAR PCAP files and metadata
+├── calib_imgs_cam0/          # Camera 0 calibration images
+├── calib_imgs_cam1/          # Camera 1 calibration images
+├── csv_cam0/                 # Camera 0 synchronized CSV files
+├── csv_cam1/                 # Camera 1 synchronized CSV files
+└── scripts_2/                # All calibration scripts
+
+### Step 1: Data Capture
+#### Capture Camera Calibration Images
+Capture 25 images from camera 0 with 2-second intervals
+python scripts_2/capture_cam.py --idx 0 --outdir calib_imgs_cam0 --n 25 --pause 2.0
+
+#### Repeat for other cameras
+python scripts_2/capture_cam.py --idx 1 --outdir calib_imgs_cam1 --n 25 --pause 2.0
+python scripts_2/capture_cam.py --idx 2 --outdir calib_imgs_cam2 --n 25 --pause 2.0
+python scripts_2/capture_cam.py --idx 3 --outdir calib_imgs_cam3 --n 25 --pause 2.0
+
+#### Capture LiDAR Data
+Record LiDAR data (Ctrl+C to stop)
+python scripts_2/capture_lidar.py --ip 192.168.1.1 --outdir pcap --n-seconds 60
+
+### Step 2: Camera Intrinsic Calibration
+Calibrate each camera's intrinsics
+python scripts_2/intrinsic_to_yaml.py calib_imgs_cam0
+python scripts_2/intrinsic_to_yaml.py calib_imgs_cam1
+python scripts_2/intrinsic_to_yaml.py calib_imgs_cam2
+python scripts_2/intrinsic_to_yaml.py calib_imgs_cam3
+Output: calib/calib_imgs_cam0_intrinsics.yaml (and similar for other cameras)
+
+### Step 3: Extract Board Poses
+Extract board-to-camera poses for each camera
+python scripts_2/extract_cam_poses.py calib_imgs_cam0
+python scripts_2/extract_cam_poses.py calib_imgs_cam1
+python scripts_2/extract_cam_poses.py calib_imgs_cam2
+python scripts_2/extract_cam_poses.py calib_imgs_cam3
+Output: calib/calib_imgs_cam0_board_poses.json (and similar for other cameras)
+
+### Step 4: Export LiDAR Data to CSV
+#### Method A: Using Ouster Studio (Recommended)
+
+1. Open Ouster Studio
+2. Load your PCAP file (pcap/sensor_data.pcap)
+3. Export synchronized frames as CSV files
+4. Save to csv_cam0/, csv_cam1/, etc. folders
+5. Ensure CSV filenames match image timestamps
+
+#### Method B: Using Python Scripts
+Extract planes from PCAP (alternative approach)
+python scripts_2/extract_lidar_planes_packets.py pcap/sensor_data.pcap --dist 0.02 --min_points 200
+
+### Step 5: Extrinsic Calibration
+#### Option A: Python Pipeline (Experimental)
+Run complete calibration for camera 0
+python scripts_2/csv_lidar_cam_calib_final.py \
+  --intrinsics "calib/calib_imgs_cam0_intrinsics.yaml" \
+  --board_json "calib/calib_imgs_cam0_board_poses.json" \
+  --img_dir "calib_imgs_cam0" \
+  --csv_dir "csv_cam0" \
+  --out_dir "calib"
+
+#### Option B: MATLAB Pipeline (Recommended)
+##### Step 5B.1: Prepare Data for MATLAB
+matlab% In MATLAB, navigate to scripts_2/matlab/ and run:
+prep_cam(0)  % Prepare camera 0 data
+prep_cam(1)  % Prepare camera 1 data
+prep_cam(2)  % Prepare camera 2 data
+prep_cam(3)  % Prepare camera 3 data
+
+##### Step 5B.2: Use MATLAB Lidar Camera Calibrator
+
+Open MATLAB and type: lidarCameraCalibrator
+Load the prepared data:
+Images: Select folder out/cam0/ (contains images)
+Point Clouds: Select folder out/cam0/pointclouds/
+Intrinsics: Load out/cam0/intrinsics/cam_intrinsics.mat
+
+Follow the calibrator GUI:
+1. Detect checkerboards in images
+2. Segment planes in point clouds
+3. Run calibration algorithm
+4. Export calibration results to cam0_tform.mat
+
+##### Step 5B.3: Convert MATLAB Results
+matlab% Convert MATLAB results to YAML format
+mat2yaml('cam0_tform.mat', 'cam0_tform.yaml', 'T_lidar_to_cam0')
+
+### Step 6: Validation and Quality Check
+Verify pose quality
+python scripts_2/verify_poses.py calib/calib_imgs_cam0_board_poses.json
+
+Check calibration results (if using Python pipeline)
+View generated overlay images: calib/cam0_overlay.png
+Check projection masks: calib/cam0_mask.png
+
+### Step 7: Integration and Testing
+Load calibration results in your sensor fusion application
+Test projection accuracy using the overlay visualizations
+Validate temporal synchronization between sensors
+Refine calibration if reprojection errors are high
+
+## Troubleshooting Tips
+### Poor Checkerboard Detection
+Ensure high contrast between squares
+Use iPad display for consistent illumination
+Capture images at various angles and distances
+Check that squares_x and squares_y parameters match your board
+
+### LiDAR Plane Segmentation Issues
+Adjust --dist parameter (try 0.01-0.03)
+Increase --min_points for noisy environments
+Use --rng_min and --rng_max to filter distance ranges
+Try --vertical_only flag for vertical checkerboards
+
+### Calibration Quality Issues
+Increase number of calibration image pairs
+Ensure good spatial distribution of board poses
+Check temporal synchronization between sensors
+Validate intrinsic calibration quality first
+
+### MATLAB vs Python Trade-offs
+MATLAB: More robust, better GUI, proven algorithms
+Python: Open source, more customizable, better for automation
+Start with MATLAB for initial results, then adapt to Python if needed
+
+## Example Complete Workflow
+#### 1. Capture data (assuming setup is ready)
+python scripts_2/capture_cam.py --idx 0 --outdir calib_imgs_cam0 --n 30
+python scripts_2/capture_lidar.py --ip 192.168.1.1 --outdir pcap
+
+#### 2. Process camera data
+python scripts_2/intrinsic_to_yaml.py calib_imgs_cam0
+python scripts_2/extract_cam_poses.py calib_imgs_cam0
+
+#### 3. Export LiDAR CSVs using Ouster Studio
+(Manual step - export synchronized frames)
+
+#### 4. Run calibration
+python scripts_2/csv_lidar_cam_calib_final.py \
+  --intrinsics "calib/calib_imgs_cam0_intrinsics.yaml" \
+  --board_json "calib/calib_imgs_cam0_board_poses.json" \
+  --img_dir "calib_imgs_cam0" \
+  --csv_dir "csv_cam0" \
+  --out_dir "calib"
+
+#### 5. Validate results
+python scripts_2/verify_poses.py calib/calib_imgs_cam0_board_poses.json
+
 ## Notes
 - The MATLAB approach proved most reliable for final extrinsic calibration
 - CSV export from Ouster Studio provides the most consistent LiDAR data format
